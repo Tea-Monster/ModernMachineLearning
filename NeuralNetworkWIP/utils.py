@@ -15,11 +15,11 @@ class SplitImage():
     handwritten_area.save('handwritten.png')
     '''
 
-    def __init__(self, path):
+    def __init__(self, path, transitions=None):
         self.path = path
         self.image = Image.open(path)
         self.width, self.height = self.image.size
-        self.transitions = None
+        self.transitions = transitions
     
     def black_and_white(self):
         threshold = 195
