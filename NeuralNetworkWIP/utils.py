@@ -86,64 +86,87 @@ class SplitImage():
         return self.transitions
     
 
+class LineSegment():
+    def __init__(self, file_name: str, file_path: str, segment_start: int, segment_end:int, segment_text: str=None):
+        self.file_name = file_name
+        self.file_path = file_path
+        self.segment_start = segment_start
+        self.segment_end = segment_end
+        self.segment_text = segment_text
 
-class LineSegments():
-    
-    def __init__(self, path, window_len=60, window='flat', line_height_threshold=100):
-        self.path = path
-        self.img = Image.open(path)
-        self.pixelized = np.array(self.img)
-        self.window_len = window_len
-        self.window = window
-        self.line_height_threshold = line_height_threshold
-        self.line_segments = None
+    # Returns the line segment cropped out of an image
+    def segment_image(self):
+        full_image = Image.open(self.file_path)
+        _, width = full_image.size
+        return full_image.crop((0, self.segment_start, width, self.segment_end))
 
+    # Turn image into black and white
+    @staticmethod
+    def black_and_white(image: Image, threshold=200):
+        fn = lambda x : 255 if x > threshold else 0
+        image = image.convert('L').point(fn, mode='1')
+        return image
 
-    # code from https://www.kaggle.com/code/irinaabdullaeva/text-segmentation
-    def smooth(self, x, window_len=45, window='hanning'):
-        if x.size < window_len:
-            raise ValueError("Input vector needs to be bigger than window size.") 
-        if window_len<3:
-            return x
-        if not window in ['flat', 'hanning', 'hamming', 'bartlett', 'blackman']:
-            raise ValueError("Window is on of 'flat', 'hanning', 'hamming', 'bartlett', 'blackman'")
-        s = np.r_[x[window_len-1:0:-1],x,x[-2:-window_len-1:-1]]
-        if window == 'flat': #moving average
-            w = np.ones(window_len,'d')
-        else:
-            w = eval('np.'+window+'(window_len)')
+    # Horizontal projection
+    @staticmethod
+    def horizontal_projection(image: Image):
+        pixels = np.array(image)
+        horizontal_projection = np.sum(255 - pixels, axis=1)
+        return horizontal_projection
 
-        y = np.convolve(w/w.sum(),s,mode='valid')
-        return y
+    # Normalize values so that they are all between 0 and 1
+    @staticmethod
+    def normalize_projection(projection):
+        minimum, maximum = min(projection), max(projection)
+        span = maximum - minimum
+        normalized = [(value - minimum) / span for value in projection]
+        return normalized
 
-    def crop_lines(self, local_minima, threshold=0):
-        x1 = 0
-        cropped = []
-        diff = []
-        for i, min in enumerate(local_minima):
-            x2 = min
-            #print(f"x1 = {x1}, x2 = {x2}, diff = {x2-x1}")
-            if x2-x1 >= threshold:
-                cropped.append((x1, x2))
-            x1 = min
-        return cropped
+    # Remove noise by setting every value below a certain threshold to 0
+    @staticmethod
+    def cut_noise_from_projection(projection, threshold=0.05):
+        projection = [value if value > threshold else 0 for value in projection]
+        return projection
 
-    def show_crop_lines(self, img, cropped):
-        plots = len(cropped)
-        for i, l in enumerate(cropped):
-            line = img[l[0]:l[1]]
-            plt.subplot(plots, 1, i+1)
-            plt.axis('off')
-            _ = plt.imshow(line, cmap='gray')
-            plt.xticks([]), plt.yticks([])  # to hide tick values on X and Y axis
+    # Smooth out a the projection
+    @staticmethod
+    def smoothen_projection(data, window_len=70):
+        kernel = np.ones(window_len, 'd')
+        smoothed_out = np.convolve(kernel/kernel.sum(), data, mode='same')
+        return smoothed_out
 
+    # Calculate Local Minima
+    @staticmethod
+    def calculate_local_minima(image: Image):
+        image = LineSegment.black_and_white(image)
 
-    def segment_lines(self):
-        horizontal_projection = np.sum(255 - self.pixelized, axis=1)
-        smoothed = self.smooth(horizontal_projection, self.window_len, window='flat')
-        local_minima = argrelextrema(smoothed, np.less)
-        local_minima = np.array(local_minima).flatten()
-        cropped = self.crop_lines(local_minima, self.line_height_threshold)
-        return cropped
+        projection = LineSegment.horizontal_projection(image)
+        projection = LineSegment.normalize_projection(projection)
+        projection = LineSegment.smoothen_projection(projection)
+        projection = LineSegment.cut_noise_from_projection(projection)
+        projection = LineSegment.smoothen_projection(projection)
 
+        # Signum of the first order "derivative"
+        grad_sign = []
+        for i in range(len(projection)-1):
+            delta = projection[i+1] - projection[i]
+            grad_sign.append(np.sign(delta))
 
+        # Collect minima based on the second order "derivative"
+        minima = []
+        for i in range(len(projection)-2):
+            if grad_sign[i+1] - grad_sign[i] > 0:
+                minima.append(i+1)
+        return minima
+
+    # Create the list of segments
+    @staticmethod
+    def calculate_segments(image: Image, threshold=100):
+        minima = LineSegment.calculate_local_minima(image)
+        list_of_segments = []
+        for i in range(len(minima)-1):
+            m1 = minima[i]
+            m2 = minima[i+1]
+            if m2 - m1 > threshold:
+                list_of_segments.append((m1, m2))
+        return list_of_segments
